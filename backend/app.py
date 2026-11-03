@@ -1,8 +1,11 @@
+import os
+
 from flask import Flask, jsonify
 from flask_cors import CORS
 from database import init_db
 from seed_data import seed_database_if_empty
 from email_utils import get_email_configuration_status
+from config import ENV_LOADED, ENV_PATH
 
 # Import Route Blueprints
 from routes.profile_routes import profile_bp
@@ -72,5 +75,8 @@ app = create_app()
 
 if __name__ == '__main__':
     print("[SERVER] Starting Fake Profile Detection Engine on http://localhost:5000")
+    print(f"[ENV] app.py: {__file__}", flush=True)
+    print(f"[ENV] .env path: {ENV_PATH}", flush=True)
+    print(f"[ENV] .env exists: {os.path.isfile(ENV_PATH)}; loaded: {ENV_LOADED}", flush=True)
     print(f"[EMAIL CONFIG] {get_email_configuration_status()}", flush=True)
     app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)

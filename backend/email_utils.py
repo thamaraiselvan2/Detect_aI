@@ -1,21 +1,40 @@
 import os
+import socket
 import smtplib
 from datetime import datetime, timezone
 from email.message import EmailMessage
 
-# Load the same project/backend .env locations even when this service is imported directly.
-from config import BASE_DIR, PROJECT_DIR  # noqa: F401
+from config import BASE_DIR  # noqa: F401
+
+
+def _parse_bool(value, default=False):
+    """Parse common environment boolean values without treating any text as true."""
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_port(value, default=587):
+    """Parse the SMTP port and fall back safely when it is missing or invalid."""
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return default
+    return port if 1 <= port <= 65535 else default
 
 
 def get_email_configuration_status():
     """Returns safe configuration diagnostics without exposing credentials."""
+    raw_port = os.getenv("MAIL_PORT", "").strip()
+    raw_tls = os.getenv("MAIL_USE_TLS")
+    settings = _smtp_settings()
     return {
         "MAIL_HOST": bool(os.getenv("MAIL_HOST", "").strip()),
-        "MAIL_PORT": bool(os.getenv("MAIL_PORT", "").strip()),
+        "MAIL_PORT": _parse_port(raw_port, default=0) if raw_port else False,
         "MAIL_USERNAME": bool(os.getenv("MAIL_USERNAME", "").strip()),
         "MAIL_PASSWORD": bool(os.getenv("MAIL_PASSWORD", "")),
         "MAIL_FROM": bool(os.getenv("MAIL_FROM", "").strip()),
-        "MAIL_USE_TLS": bool(os.getenv("MAIL_USE_TLS", "").strip())
+        "MAIL_USE_TLS": _parse_bool(raw_tls) if raw_tls is not None else False,
     }
 
 
@@ -25,11 +44,8 @@ def _smtp_settings():
     username = os.getenv("MAIL_USERNAME", "").strip()
     password = os.getenv("MAIL_PASSWORD", "")
     sender = os.getenv("MAIL_FROM", username).strip()
-    try:
-        port = int(os.getenv("MAIL_PORT", "587"))
-    except (TypeError, ValueError):
-        port = 587
-    use_tls = os.getenv("MAIL_USE_TLS", "true").lower() == "true"
+    port = _parse_port(os.getenv("MAIL_PORT", "587"))
+    use_tls = _parse_bool(os.getenv("MAIL_USE_TLS"), default=True)
     return {
         "host": host,
         "port": port,
@@ -61,7 +77,14 @@ def _send_smtp_message(message, settings):
                 smtp.quit()
             except Exception:
                 pass
-        print(f"[EMAIL] SMTP delivery failed: {type(error).__name__}: {error}", flush=True)
+        if isinstance(error, socket.gaierror):
+            print(
+                f"[EMAIL] SMTP hostname resolution failed for "
+                f"{settings['host']}:{settings['port']}: {error}",
+                flush=True,
+            )
+        else:
+            print(f"[EMAIL] SMTP delivery failed: {type(error).__name__}: {error}", flush=True)
         return {"sent": False, "status": "failed", "exception_type": type(error).__name__}
 
 
@@ -112,7 +135,14 @@ def test_smtp_delivery(recipient=None):
                 pass
         result["status"] = "failed"
         result["safe_error"] = f"{type(error).__name__}: {error}"
-        print(f"[EMAIL] SMTP diagnostic failed: {result['safe_error']}", flush=True)
+        if isinstance(error, socket.gaierror):
+            print(
+                f"[EMAIL] SMTP diagnostic hostname resolution failed for "
+                f"{settings['host']}:{settings['port']}: {error}",
+                flush=True,
+            )
+        else:
+            print(f"[EMAIL] SMTP diagnostic failed: {result['safe_error']}", flush=True)
         return result
 
 
@@ -164,11 +194,11 @@ def send_impersonation_email(
     smtp_config = settings
     print({
         "smtp_host_present": bool(smtp_config["host"]),
-        "smtp_port_present": bool(os.getenv("MAIL_PORT", "").strip()),
+        "smtp_port": smtp_config["port"],
         "smtp_username_present": bool(smtp_config["username"]),
         "smtp_password_present": bool(smtp_config["password"]),
         "smtp_from_present": bool(smtp_config["sender"]),
-        "smtp_tls_present": bool(os.getenv("MAIL_USE_TLS", "").strip())
+        "smtp_use_tls": smtp_config["use_tls"],
     }, flush=True)
     if not smtp_config["host"] or not smtp_config["sender"] or not smtp_config["username"] or not smtp_config["password"]:
         return {"sent": False, "status": "not_configured", "message": "Authenticated email delivery is not configured."}

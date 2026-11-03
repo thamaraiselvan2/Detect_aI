@@ -2,13 +2,16 @@ import os
 from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_DIR = os.path.dirname(BASE_DIR)
 DATABASE_PATH = os.path.join(BASE_DIR, "fakedetector.db")
+ENV_PATH = os.path.join(BASE_DIR, ".env")
 
-# Support starting Flask from either the repository root or backend directory.
-for _env_path in (os.path.join(PROJECT_DIR, ".env"), os.path.join(BASE_DIR, ".env")):
-    if os.path.isfile(_env_path):
-        load_dotenv(_env_path, override=True)
+
+def load_environment():
+    """Load backend settings from the .env next to this module."""
+    return load_dotenv(dotenv_path=ENV_PATH, override=False)
+
+
+ENV_LOADED = load_environment()
 
 # Risk Level Classification Thresholds
 RISK_LEVELS = {

@@ -9,6 +9,14 @@ from config import MONITORING_ALERT_THRESHOLD, EMAIL_CONFIG
 monitor_bp = Blueprint('monitor_bp', __name__)
 
 
+def _mask_email(email):
+    """Return a safe recipient identifier for workflow logs."""
+    if not email or "@" not in email:
+        return "<missing>"
+    local, domain = email.split("@", 1)
+    return f"{local[:2]}***@{domain}" if len(local) > 2 else f"{local[:1]}***@{domain}"
+
+
 def _safe_email_status(result):
     """Expose only the supported delivery state to API consumers."""
     status = (result or {}).get("status", "failed")
@@ -18,7 +26,17 @@ def _safe_email_status(result):
 def _dispatch_alert_email(alert):
     """Attempt delivery without allowing email errors to affect monitoring."""
     if alert.get("email_status") == "sent":
+        print(
+            f"[MONITOR] Alert {alert['id']} email skipped: already sent.",
+            flush=True,
+        )
         return {"status": "duplicate", "sent": False}
+    print(
+        f"[MONITOR] Dispatching alert {alert['id']} for "
+        f"@{alert.get('demo_username')} against @{alert.get('protected_username')} "
+        f"to {_mask_email(alert.get('email'))}.",
+        flush=True,
+    )
     try:
         signals = json.loads(alert.get("evidence_json") or "{}")
         result = send_impersonation_email(
@@ -35,6 +53,11 @@ def _dispatch_alert_email(alert):
         print(f"[MONITOR] Alert email failed (non-fatal): {type(error).__name__}: {error}", flush=True)
         result = {"status": "failed", "sent": False}
     status = _safe_email_status(result)
+    print(f"[MONITOR] SMTP_SEND_RESULT={status}", flush=True)
+    print(
+        f"[MONITOR] Alert {alert['id']} email result: {status}.",
+        flush=True,
+    )
     execute_db(
         "UPDATE alerts SET email_status = ?, email_dispatched = ?, email_sent_at = CASE WHEN ? = 'sent' THEN CURRENT_TIMESTAMP ELSE email_sent_at END WHERE id = ?",
         (status, 1 if status == "sent" else 0, status, alert["id"]),
@@ -79,17 +102,55 @@ def _process_new_demo_profile(new_profile):
     """Run automatic detection and alert delivery for one newly created profile."""
     monitored_users = query_db("SELECT * FROM protected_profiles WHERE is_monitoring_active = 1")
     all_demo_profiles = query_db("SELECT * FROM demo_profiles")
+    print(f"[MONITOR] MONITORING_ACTIVE={bool(monitored_users)}", flush=True)
+    print(
+        f"[MONITOR] PROTECTED_PROFILE_FOUND={len(monitored_users)}",
+        flush=True,
+    )
+    print(
+        f"[MONITOR] Evaluating new demo account @{new_profile.get('username')} "
+        f"against {len(monitored_users)} active protected profile(s).",
+        flush=True,
+    )
     analysis = detect_profile(new_profile, monitored_users, demo_profiles=all_demo_profiles, use_llm=True)
+    primary_match = analysis.get("primary_match") or {}
+    print(
+        f"[MONITOR] SIMILARITY_CHECK={'MATCH' if primary_match else 'NO_MATCH'}",
+        flush=True,
+    )
+    print(f"[MONITOR] RISK_SCORE={analysis.get('risk_score')}", flush=True)
+    print(
+        f"[MONITOR] DETECTION_RESULT={analysis.get('classification')}",
+        flush=True,
+    )
+    print(
+        f"[MONITOR] Detection result for @{new_profile.get('username')}: "
+        f"classification={analysis.get('classification')}, "
+        f"risk_score={analysis.get('risk_score')}, "
+        f"primary_match={primary_match.get('username') or '<none>'}.",
+        flush=True,
+    )
 
     alert_created = False
     alert_id = None
     email_delivery = {"attempted": False, "sent": False, "status": "not_detected"}
-    if (
-        analysis.get("classification") in {"SUSPICIOUS", "FAKE"}
-        and analysis["risk_score"] >= MONITORING_ALERT_THRESHOLD
-        and analysis["primary_match"]
-    ):
-        prot_id = analysis["primary_match"]["protected_id"]
+    if not monitored_users:
+        print("[MONITOR] Alert skipped: no active protected profiles.", flush=True)
+    elif analysis.get("classification") not in {"SUSPICIOUS", "FAKE"}:
+        print(
+            f"[MONITOR] Alert skipped: classification is {analysis.get('classification')}.",
+            flush=True,
+        )
+    elif analysis.get("risk_score", 0) < MONITORING_ALERT_THRESHOLD:
+        print(
+            f"[MONITOR] Alert skipped: risk score {analysis.get('risk_score', 0)} "
+            f"is below threshold {MONITORING_ALERT_THRESHOLD}.",
+            flush=True,
+        )
+    elif not primary_match:
+        print("[MONITOR] Alert skipped: no protected profile match.", flush=True)
+    else:
+        prot_id = primary_match["protected_id"]
         reason_summary = "; ".join([f["description"] for f in analysis["factors"][:8]])
         existing = query_db(
             """SELECT id, risk_score, risk_level, reason_summary, email_status
@@ -101,6 +162,10 @@ def _process_new_demo_profile(new_profile):
         if existing and existing_signature == event_signature:
             alert_id = existing["id"]
             email_delivery = {"attempted": False, "sent": existing["email_status"] == "sent", "status": "duplicate"}
+            print(
+                f"[MONITOR] Alert {alert_id} skipped: matching alert already exists.",
+                flush=True,
+            )
         else:
             alert_id, _ = execute_db("""
                 INSERT INTO alerts (protected_profile_id, demo_profile_id, alert_type, classification,
@@ -116,6 +181,10 @@ def _process_new_demo_profile(new_profile):
                 JOIN demo_profiles d ON a.demo_profile_id = d.id
                 WHERE a.id = ?
             """, (alert_id,), one=True)
+            print(
+                f"[MONITOR] RECIPIENT_FOUND={bool(alert and alert.get('email'))}",
+                flush=True,
+            )
             delivery = _dispatch_alert_email(alert)
             email_delivery = {"attempted": True, "sent": delivery["sent"], "status": delivery["status"]}
             alert_created = True

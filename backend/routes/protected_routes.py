@@ -90,6 +90,11 @@ def register_user():
         "SELECT id, username, email, original_profile_id, registered_at FROM registered_profiles WHERE id = ?",
         (registered_id,), one=True
     )
+    print(
+        f"[MONITOR] Protected profile registered for @{username}; "
+        "email alerts will be evaluated only for future demo-account creations.",
+        flush=True,
+    )
     return jsonify({
         "status": "success",
         "message": f"Profile '@{username}' successfully registered for protection.",
