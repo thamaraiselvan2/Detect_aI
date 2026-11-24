@@ -131,8 +131,9 @@ def demo_login():
 
         email_result = {"status": "no_registered_email"}
         if registered_email:
-            verify_url = f"http://localhost:5000/api/device-authorization/approve?token={raw_verification_token}"
-            deny_url = f"http://localhost:5000/api/device-authorization/deny?token={raw_verification_token}"
+            public_api_url = os.getenv("PUBLIC_API_URL", "").strip().rstrip("/") or "http://localhost:5000"
+            verify_url = f"{public_api_url}/api/device-authorization/approve?token={raw_verification_token}"
+            deny_url = f"{public_api_url}/api/device-authorization/deny?token={raw_verification_token}"
             email_result = send_device_verification_email(
                 recipient=registered_email,
                 username=username,

@@ -18,7 +18,19 @@ from routes.security_routes import security_bp
 def create_app():
     """Initializes and configures the Flask application."""
     app = Flask(__name__)
-    CORS(app, resources={r"/*": {"origins": "*"}})
+    dev_origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ]
+    configured_origins = [
+        origin.strip().rstrip("/")
+        for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    allowed_origins = list(dict.fromkeys([*dev_origins, *configured_origins]))
+    CORS(app, resources={r"/*": {"origins": allowed_origins}})
 
     # Register blueprints
     app.register_blueprint(profile_bp)
